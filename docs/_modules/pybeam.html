@@ -1,0 +1,606 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>pybeam &#8212; PyBeam 0.1.1 documentation</title>
+    
+    <link rel="stylesheet" href="../_static/classic.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    '../',
+        VERSION:     '0.1.1',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
+      };
+    </script>
+    <script type="text/javascript" src="../_static/jquery.js"></script>
+    <script type="text/javascript" src="../_static/underscore.js"></script>
+    <script type="text/javascript" src="../_static/doctools.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+  </head>
+  <body role="document">
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">PyBeam 0.1.1 documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Module code</a> &#187;</li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <h1>Source code for pybeam</h1><div class="highlight"><pre>
+<span></span><span class="ch">#!/usr/bin/python</span>
+<span class="c1"># -*- coding: utf-8 -*-</span>
+
+<span class="sd">&quot;&quot;&quot; </span>
+<span class="sd">Collection of functions for loudspeaker beamforming. </span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy.signal</span>
+<span class="kn">import</span> <span class="nn">scipy.io.wavfile</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">shutil</span>
+<span class="kn">import</span> <span class="nn">pickle</span> <span class="k">as</span> <span class="nn">pkl</span>
+<span class="kn">import</span> <span class="nn">wave</span>
+<span class="kn">import</span> <span class="nn">pyaudio</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+
+<span class="kn">from</span> <span class="nn">typing</span> <span class="k">import</span> <span class="n">Tuple</span>
+
+
+<span class="c1"># speed of sound constant</span>
+<span class="n">__c</span> <span class="o">=</span> <span class="mi">343</span> 
+
+<span class="c1"># l2-norm operation</span>
+<span class="n">__l2</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">arr</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">arr</span><span class="o">**</span><span class="mi">2</span><span class="p">))</span>
+
+<span class="c1"># linear transfer function</span>
+<span class="n">__Zf</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x_m</span><span class="p">,</span> <span class="n">y_l</span><span class="p">,</span> <span class="n">omega</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">e</span><span class="o">**</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="n">j</span> <span class="o">*</span> <span class="n">omega</span> <span class="o">/</span> <span class="n">__c</span> <span class="o">*</span> <span class="n">__l2</span><span class="p">(</span><span class="n">x_m</span> <span class="o">-</span> <span class="n">y_l</span><span class="p">))</span> \
+        <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">__l2</span><span class="p">(</span><span class="n">x_m</span> <span class="o">-</span> <span class="n">y_l</span><span class="p">))</span>
+
+<div class="viewcode-block" id="get_source_matrix"><a class="viewcode-back" href="../pybeam.html#pybeam.get_source_matrix">[docs]</a><span class="k">def</span> <span class="nf">get_source_matrix</span><span class="p">(</span><span class="n">dim</span><span class="p">:</span> <span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">delta</span><span class="p">:</span> <span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> 
+        <span class="n">center</span><span class="p">:</span> <span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generates a matrix of source points (i.e. loudspeakers). </span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        dim: A two element tuple that denotes the dimension of </span>
+<span class="sd">            the source (loudspaker) array. </span>
+<span class="sd">        delta: A two element tuple that denotes the spacing between </span>
+<span class="sd">            sources in the speaker array. </span>
+<span class="sd">        center: A three element tuple that indicates the location of </span>
+<span class="sd">            the center of the source matrix in a 3D field.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A numpy array of floats with dimensions ``dim[0] * dim[1]`` by 3.</span>
+<span class="sd">        Each row signifies a different source. </span>
+<span class="sd">        Each row is a coordinate in 3D space. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">L</span> <span class="o">=</span> <span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">L</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+        <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
+            <span class="n">y</span><span class="p">[</span><span class="n">x</span> <span class="o">*</span> <span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">z</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span>
+                                    <span class="n">center</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">//</span><span class="mi">2</span><span class="o">+</span><span class="mf">0.5</span><span class="p">)</span><span class="o">*</span><span class="n">delta</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                    <span class="n">center</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+                                    <span class="n">center</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="n">z</span><span class="o">-</span><span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">//</span><span class="mi">2</span><span class="o">+</span><span class="mf">0.5</span><span class="p">)</span><span class="o">*</span><span class="n">delta</span><span class="p">[</span><span class="mi">1</span><span class="p">]])</span>
+    <span class="k">return</span> <span class="n">y</span></div>
+
+<div class="viewcode-block" id="get_verification_matrix"><a class="viewcode-back" href="../pybeam.html#pybeam.get_verification_matrix">[docs]</a><span class="k">def</span> <span class="nf">get_verification_matrix</span><span class="p">(</span><span class="n">R</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">dim</span><span class="p">:</span> <span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mi">37</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> 
+        <span class="n">b</span><span class="p">:</span> <span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mi">90</span><span class="p">,</span> <span class="mi">90</span><span class="p">))</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Genereates a matrix of verification points according to input</span>
+<span class="sd">    Think of the output as a matrix of fake microphones used to </span>
+<span class="sd">    help in calculations. </span>
+<span class="sd">    </span>
+<span class="sd">    Args: </span>
+<span class="sd">        R: The radius of the hemispherical/semicircular region. </span>
+<span class="sd">            Optional, defaults to 3.</span>
+<span class="sd">        dim: A two element tuple that indicates where to put the </span>
+<span class="sd">            verification points.</span>
+
+<span class="sd">            Ex 1: ``dim=(37,1)`` indicates to construct a horizontal </span>
+<span class="sd">            semicircle with 37 control points</span>
+<span class="sd">            </span>
+<span class="sd">            Ex 2: ``dim=(1,37)`` indicates to construct a vertical </span>
+<span class="sd">            emicircle with 37 control points</span>
+<span class="sd">            </span>
+<span class="sd">            Ex 3: ``dim=(37,37)`` indicates to contruct a hemisphere</span>
+<span class="sd">            with 37 by 37 control points (a total of 1369)</span>
+<span class="sd">            </span>
+<span class="sd">        b: A two element tuple that indicates which location </span>
+<span class="sd">            to put the bright point (i.e. where the signal should </span>
+<span class="sd">            be aimed). If one element in dim is 1, make sure to set </span>
+<span class="sd">            the corresponding index in ``b`` to ``90``. </span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A numpy array with dimensions ``dim[0]*dim[1]`` by 3. Each row signifies</span>
+<span class="sd">        a different source. Each row is a coordinate in 3D space. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">M</span> <span class="o">=</span> <span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">delta_theta</span> <span class="o">=</span> <span class="mi">180</span> <span class="o">/</span> <span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">180</span> <span class="k">if</span> <span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">0</span> 
+    <span class="n">delta_phi</span> <span class="o">=</span> <span class="mi">180</span> <span class="o">/</span> <span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">180</span> <span class="k">if</span> <span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">0</span>
+    <span class="n">xtmp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
+    <span class="n">bidx</span><span class="p">,</span> <span class="n">mindist</span><span class="p">,</span> <span class="n">targpoint</span> <span class="o">=</span> \
+            <span class="o">-</span><span class="mi">1</span><span class="p">,</span> \
+            <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span><span class="p">),</span> \
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">b</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">b</span><span class="p">[</span><span class="mi">0</span><span class="p">])),</span>
+                    <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">b</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">b</span><span class="p">[</span><span class="mi">0</span><span class="p">])),</span>
+                    <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">b</span><span class="p">[</span><span class="mi">1</span><span class="p">]))])</span>
+    <span class="k">if</span> <span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span> <span class="c1">#semicircle with variable phi</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
+            <span class="n">xtmp</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> \
+                    <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">j</span><span class="o">*</span><span class="n">delta_phi</span><span class="p">),</span> <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">j</span><span class="o">*</span><span class="n">delta_phi</span><span class="p">)])</span>
+            <span class="k">if</span> <span class="n">__l2</span><span class="p">(</span><span class="n">xtmp</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">-</span> <span class="n">targpoint</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">mindist</span><span class="p">:</span>
+                <span class="n">bidx</span> <span class="o">=</span> <span class="n">j</span>
+                <span class="n">mindist</span> <span class="o">=</span> <span class="n">__l2</span><span class="p">(</span><span class="n">xtmp</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">-</span> <span class="n">targpoint</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span> <span class="c1">#semicircle with variable theta</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+            <span class="n">xtmp</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> \
+                    <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+                            <span class="p">[</span><span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">i</span><span class="o">*</span><span class="n">delta_theta</span><span class="p">),</span> 
+                            <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">i</span><span class="o">*</span><span class="n">delta_theta</span><span class="p">),</span> 
+                            <span class="mi">0</span><span class="p">])</span>
+            <span class="k">if</span> <span class="n">__l2</span><span class="p">(</span><span class="n">xtmp</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">-</span> <span class="n">targpoint</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">mindist</span><span class="p">:</span>
+                <span class="n">bidx</span> <span class="o">=</span> <span class="n">i</span>
+                <span class="n">mindist</span> <span class="o">=</span> <span class="n">__l2</span><span class="p">(</span><span class="n">xtmp</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">-</span> <span class="n">targpoint</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span> <span class="c1">#full hemisphere</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+            <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
+                <span class="n">idx</span> <span class="o">=</span> <span class="n">i</span> <span class="o">*</span> <span class="n">dim</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">j</span>
+                <span class="n">xtmp</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+                        <span class="p">[</span><span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">i</span><span class="o">*</span><span class="n">delta_theta</span><span class="p">)</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">j</span><span class="o">*</span><span class="n">delta_phi</span><span class="p">),</span>
+                        <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">i</span><span class="o">*</span><span class="n">delta_theta</span><span class="p">)</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">j</span><span class="o">*</span><span class="n">delta_phi</span><span class="p">),</span>
+                        <span class="n">R</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">j</span><span class="o">*</span><span class="n">delta_phi</span><span class="p">)])</span>
+                <span class="k">if</span> <span class="n">__l2</span><span class="p">(</span><span class="n">xtmp</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">-</span> <span class="n">targpoint</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">mindist</span><span class="p">:</span>
+                    <span class="n">bidx</span> <span class="o">=</span> <span class="n">idx</span>
+                    <span class="n">mindist</span> <span class="o">=</span> <span class="n">__l2</span><span class="p">(</span><span class="n">xtmp</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">-</span> <span class="n">targpoint</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">xtmp</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">:</span><span class="n">bidx</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">xtmp</span><span class="p">[</span><span class="n">bidx</span><span class="p">],</span> <span class="n">xtmp</span><span class="p">[:</span><span class="n">bidx</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">x</span> </div>
+
+<div class="viewcode-block" id="get_DAS_filters"><a class="viewcode-back" href="../pybeam.html#pybeam.get_DAS_filters">[docs]</a><span class="k">def</span> <span class="nf">get_DAS_filters</span><span class="p">(</span><span class="n">X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> 
+        <span class="n">samp_freq</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">44100</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">1024</span><span class="p">,</span> 
+        <span class="n">modeling_delay</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">matrix</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generates a matrix of complex filters using Delay &amp; Sum. </span>
+
+<span class="sd">    Essentially used as a black-box to generate filters </span>
+<span class="sd">    for the :func:`~pybeam.map_filters` function.  </span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        X: A verification matrix </span>
+<span class="sd">            generated by func:`~pybeam.get_verification_matrix`.</span>
+<span class="sd">        Y: A source matrix generated by</span>
+<span class="sd">            :func:`~pybeam.get_source_matrix`. </span>
+<span class="sd">        samp_freq: The frequency at which the audio signal will </span>
+<span class="sd">            be sampled at. </span>
+<span class="sd">        samples: The number of samples per frame, any arbitrary </span>
+<span class="sd">            integer that is some power of 2. </span>
+<span class="sd">        modeling_delay: The modeling delay in seconds. </span>
+<span class="sd">    </span>
+<span class="sd">    Returns:</span>
+<span class="sd">        A complex numpy matrix with frequency domain filters for </span>
+<span class="sd">        each loudspeaker.       </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Y</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">gamma</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x_b</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">l</span><span class="p">:</span> <span class="mi">16</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">__l2</span><span class="p">(</span><span class="n">x_b</span> <span class="o">-</span> <span class="n">y</span><span class="p">[</span><span class="n">l</span><span class="p">])</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">L</span>
+    <span class="n">freqs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fftfreq</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="mi">1</span> <span class="o">/</span> <span class="n">samp_freq</span><span class="p">)</span>
+    <span class="n">q_DAS</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">freqs</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="n">L</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">))</span>
+    
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">freqs</span><span class="o">.</span><span class="n">size</span><span class="p">):</span>
+        <span class="n">freq</span> <span class="o">=</span> <span class="n">freqs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="n">omega</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">freq</span>
+        <span class="n">z_b</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">L</span><span class="p">,</span><span class="mi">1</span><span class="p">)),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+            <span class="n">z_b</span><span class="p">[</span><span class="n">l</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">__Zf</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Y</span><span class="p">[</span><span class="n">l</span><span class="p">],</span> <span class="n">omega</span><span class="p">)</span>
+        <span class="n">Gamma</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">L</span><span class="p">,</span><span class="n">L</span><span class="p">)),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+            <span class="n">Gamma</span><span class="p">[</span><span class="n">l</span><span class="p">,</span><span class="n">l</span><span class="p">]</span> <span class="o">=</span> <span class="n">gamma</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Y</span><span class="p">,</span> <span class="n">l</span><span class="p">)</span>
+        <span class="n">this_q</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">e</span><span class="o">**</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="n">j</span> <span class="o">*</span> <span class="n">omega</span> <span class="o">*</span> <span class="n">modeling_delay</span><span class="p">)</span> \
+            <span class="o">*</span> <span class="n">Gamma</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="n">z_b</span><span class="p">)</span>
+        <span class="n">q_DAS</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">this_q</span><span class="o">.</span><span class="n">T</span>
+    <span class="k">return</span> <span class="n">q_DAS</span></div>
+
+<div class="viewcode-block" id="get_max_energy"><a class="viewcode-back" href="../pybeam.html#pybeam.get_max_energy">[docs]</a><span class="k">def</span> <span class="nf">get_max_energy</span><span class="p">(</span><span class="n">Y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> 
+        <span class="n">sigma</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">R</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns the maximum energy consumption of a source matrix</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        sigma: An arbitrary constant, increase to use more energy.</span>
+<span class="sd">        R: The distance between verification points and the center</span>
+<span class="sd">            of the loudspeaker array.</span>
+<span class="sd">        Y: A source matrix generated by </span>
+<span class="sd">            :func:`~pybeam.get_source_matrix`.</span>
+<span class="sd">    </span>
+<span class="sd">    Returns:</span>
+<span class="sd">        The maximum energy consumption of the source matrix </span>
+<span class="sd">        under the current constraints</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">sigma</span> <span class="o">*</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">R</span><span class="p">)</span><span class="o">**</span><span class="mi">2</span> <span class="o">/</span> <span class="n">Y</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span></div>
+    
+<div class="viewcode-block" id="get_target_sound_pressures"><a class="viewcode-back" href="../pybeam.html#pybeam.get_target_sound_pressures">[docs]</a><span class="k">def</span> <span class="nf">get_target_sound_pressures</span><span class="p">(</span><span class="n">X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> 
+        <span class="n">onval</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">offval</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">matrix</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generates a matrix of target sound pressures</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        onval: The sound pressure at the _bright_ point. </span>
+<span class="sd">        offval: The sound pressure at _dark_ points. </span>
+<span class="sd">        X: A verificatjon matrix generated by </span>
+<span class="sd">            :func:`~pybeam.get_verification_matrix`. </span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A complex numpy matrix of target sound pressures</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">onval</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span><span class="n">offval</span><span class="p">]</span><span class="o">*</span><span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span> 
+        <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">T</span></div>
+
+<div class="viewcode-block" id="get_PM_filters"><a class="viewcode-back" href="../pybeam.html#pybeam.get_PM_filters">[docs]</a><span class="k">def</span> <span class="nf">get_PM_filters</span><span class="p">(</span><span class="n">X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+        <span class="n">E_max</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">p_hat</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">matrix</span><span class="p">,</span>
+        <span class="n">samp_freq</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">44100</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">1024</span><span class="p">,</span> <span class="n">modeling_delay</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+        <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">matrix</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generates a matrix of complex filters using Pressure Matching. </span>
+
+<span class="sd">    Essentially used as a black-box to generate filters </span>
+<span class="sd">    for the :func:`~pybeam.map_filters` function.  </span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        X: A verification matrix generated by  </span>
+<span class="sd">            :func:`~pybeam.get_verification_matrix`.</span>
+<span class="sd">        Y: A source matrix generated by </span>
+<span class="sd">            :func:`~pybeam.get_source_matrix`. </span>
+<span class="sd">        E_max: The maximum energy consumption of the source matrix</span>
+<span class="sd">            as calculated by :func:`~pybeam.get_max_energy`.</span>
+<span class="sd">        p_hat: Matrix of target sound pressures generated by</span>
+<span class="sd">            :func:`pybeam.get_target_sound_pressures`.</span>
+<span class="sd">        samp_freq: The frequency at which the audio signal will </span>
+<span class="sd">            be sampled at.</span>
+<span class="sd">        samples: The number of samples per frame, any arbitrary </span>
+<span class="sd">            integer that is some power of 2. </span>
+<span class="sd">        modeling_delay: The modeling delay in seconds. </span>
+<span class="sd">        verbose: Flag for debug print statements.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A complex numpy matrix with frequency domain filters for </span>
+<span class="sd">        each loudspeaker.       </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">p_b_hat</span> <span class="o">=</span> <span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Y</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">p_hat</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">q</span><span class="p">,</span> <span class="n">z_b</span><span class="p">:</span> <span class="p">(</span><span class="n">p_b_hat</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">z_b</span><span class="p">,</span> <span class="n">q</span><span class="p">))[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">E</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">q</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="n">q</span><span class="p">)</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">q</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">epsilon_beta</span><span class="p">,</span> <span class="n">beta_min</span> <span class="o">=</span> <span class="mf">1e-5</span><span class="p">,</span> <span class="mf">1e-19</span>
+    <span class="n">freqs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fftfreq</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="mi">1</span> <span class="o">/</span> <span class="n">samp_freq</span><span class="p">)</span>
+    <span class="n">q_PM</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">freqs</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="n">L</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">))</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">freqs</span><span class="p">)):</span>
+        <span class="n">freq</span> <span class="o">=</span> <span class="n">freqs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="k">if</span><span class="p">(</span><span class="n">verbose</span><span class="p">):</span> <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;frequency:&#39;</span><span class="p">,</span> <span class="n">freq</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">omega</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">freq</span>
+        <span class="n">beta</span> <span class="o">=</span> <span class="n">beta_min</span>
+        <span class="n">Z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">L</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">M</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+                <span class="n">Z</span><span class="p">[</span><span class="n">m</span><span class="p">,</span> <span class="n">l</span><span class="p">]</span> <span class="o">=</span> <span class="n">__Zf</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="n">m</span><span class="p">],</span> <span class="n">Y</span><span class="p">[</span><span class="n">l</span><span class="p">],</span> <span class="n">omega</span><span class="p">)</span>
+        <span class="n">q_temp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="n">Z</span><span class="p">)</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="n">Z</span> <span class="o">+</span> <span class="n">beta</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">L</span><span class="p">)))</span> \
+            <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="n">Z</span><span class="p">)</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="n">p_hat</span>
+        <span class="n">q_hat</span> <span class="o">=</span> <span class="n">W</span><span class="p">(</span><span class="n">q_temp</span><span class="p">,</span> <span class="n">Z</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="n">q_temp</span>
+        <span class="k">while</span><span class="p">(</span><span class="n">E</span><span class="p">(</span><span class="n">q_hat</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">E_max</span><span class="p">):</span>
+            <span class="n">beta</span> <span class="o">+=</span> <span class="n">epsilon_beta</span>
+            <span class="n">q_temp</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">inv</span><span class="p">(</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="n">Z</span><span class="p">)</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="n">Z</span> <span class="o">+</span> <span class="n">beta</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">L</span><span class="p">)))</span> \
+                <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">conjugate</span><span class="p">(</span><span class="n">Z</span><span class="p">)</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="n">p_hat</span>
+            <span class="n">q_hat</span> <span class="o">=</span> <span class="n">W</span><span class="p">(</span><span class="n">q_temp</span><span class="p">,</span> <span class="n">Z</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="n">q_temp</span>
+        <span class="n">q_PM</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">e</span><span class="o">**</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="n">j</span> <span class="o">*</span> <span class="n">omega</span> <span class="o">*</span> <span class="n">modeling_delay</span><span class="p">)</span> <span class="o">*</span> <span class="n">q_hat</span><span class="o">.</span><span class="n">T</span> 
+    <span class="k">return</span> <span class="n">q_PM</span>    </div>
+        
+<div class="viewcode-block" id="map_filters"><a class="viewcode-back" href="../pybeam.html#pybeam.map_filters">[docs]</a><span class="k">def</span> <span class="nf">map_filters</span><span class="p">(</span><span class="n">filters</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">matrix</span><span class="p">,</span> 
+        <span class="n">signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Maps filters onto an audio signal.</span>
+<span class="sd">    </span>
+<span class="sd">    Args:</span>
+<span class="sd">        filters: A numpy matrix with complex filters for each</span>
+<span class="sd">            output loudspeaker. The ouput of either </span>
+<span class="sd">            :func:`~pybeam.get_DAS_filters` or </span>
+<span class="sd">            :func:`~pybeam.get_PM_filters`.</span>
+<span class="sd">        signal: An audio monosignal (i.e. a one-dimensional</span>
+<span class="sd">            numpy array).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A numpy array with a new signal for each output</span>
+<span class="sd">        loudspeaker.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1">#beamforming filters</span>
+    <span class="n">samples</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="n">filters</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">filters</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">o</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">L</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">)),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;complex_&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">),</span> <span class="n">samples</span><span class="o">//</span><span class="mi">4</span><span class="p">):</span>
+        <span class="n">snapshot</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">signal</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span><span class="o">+</span><span class="n">samples</span><span class="p">],</span>
+                    <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">samples</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span><span class="o">+</span><span class="n">samples</span><span class="p">])),</span>
+                    <span class="s1">&#39;constant&#39;</span><span class="p">,</span>
+                    <span class="n">constant_values</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">snapshot_fft</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fft</span><span class="p">(</span><span class="n">snapshot</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+            <span class="n">snapshot_filt</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">snapshot_fft</span><span class="p">,</span> <span class="n">filters</span><span class="p">[:,</span> <span class="n">l</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+            <span class="n">o</span><span class="p">[</span><span class="n">l</span><span class="p">,</span> <span class="n">i</span><span class="p">:</span><span class="n">i</span><span class="o">+</span><span class="nb">min</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">o</span><span class="p">[</span><span class="n">l</span><span class="p">])</span> <span class="o">-</span> <span class="n">i</span><span class="p">)]</span> <span class="o">=</span> \
+                <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">ifft</span><span class="p">(</span><span class="n">snapshot_filt</span><span class="p">)[:,</span> <span class="p">:</span><span class="nb">min</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">o</span><span class="p">[</span><span class="n">l</span><span class="p">])</span> <span class="o">-</span> <span class="n">i</span><span class="p">)]</span>
+    <span class="n">abs_avgs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">o</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">max_avg</span> <span class="o">=</span> <span class="n">abs_avgs</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">abs_avgs</span><span class="p">)]</span>
+    <span class="n">scaling_factor</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">signal</span><span class="p">))</span> <span class="o">/</span> <span class="n">max_avg</span>
+    <span class="n">o</span> <span class="o">*=</span> <span class="n">scaling_factor</span>
+    
+    <span class="c1">#butterworth filter</span>
+    <span class="n">filtb</span><span class="p">,</span> <span class="n">filta</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">signal</span><span class="o">.</span><span class="n">butter</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">)</span>
+    <span class="n">o</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">signal</span><span class="o">.</span><span class="n">filtfilt</span><span class="p">(</span><span class="n">filtb</span><span class="p">,</span> <span class="n">filta</span><span class="p">,</span> <span class="n">o</span><span class="p">)</span>
+    <span class="n">o</span> <span class="o">=</span> <span class="n">o</span><span class="o">.</span><span class="n">real</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">signal</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">o</span></div>
+
+<div class="viewcode-block" id="read_wav_file"><a class="viewcode-back" href="../pybeam.html#pybeam.read_wav_file">[docs]</a><span class="k">def</span> <span class="nf">read_wav_file</span><span class="p">(</span><span class="n">fname</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">]:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Reads a ``.wav`` file from the filesystem.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">         fname: The full path to the ``.wav`` file to be read.</span>
+<span class="sd">             Note that the ``.wav`` file should be a monosignal (i.e.</span>
+<span class="sd">             not stereo). </span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        : Tuple containing: </span>
+
+<span class="sd">            signal: A numpy array containting the monosignal read in.</span>
+<span class="sd">            </span>
+<span class="sd">            samp_freq: The sampling frequency of the </span>
+<span class="sd">            ``.wav`` file read in.</span>
+<span class="sd">            </span>
+<span class="sd">            dtype: The numpy datatype of signal. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">scipy</span><span class="o">.</span><span class="n">io</span><span class="o">.</span><span class="n">wavfile</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">fname</span><span class="p">)</span>
+    <span class="n">signal</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">samp_freq</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="n">signal</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="k">return</span> <span class="n">signal</span><span class="p">,</span> <span class="n">samp_freq</span><span class="p">,</span> <span class="n">dtype</span></div>
+
+<div class="viewcode-block" id="write_wav_dir"><a class="viewcode-back" href="../pybeam.html#pybeam.write_wav_dir">[docs]</a><span class="k">def</span> <span class="nf">write_wav_dir</span><span class="p">(</span><span class="n">directory</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">output_signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> 
+        <span class="n">mapping</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">samp_freq</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">44100</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Writes a directory that can be played back by multiple speakers.</span>
+
+<span class="sd">    A directory is created, then populated with .wav files</span>
+<span class="sd">    for each speaker pair and a pickle file of mapping. </span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        directory: Writable path to which the directory is to be </span>
+<span class="sd">            written to. Warning, this function will delete the path</span>
+<span class="sd">            if the path exists and can be written to. </span>
+<span class="sd">        output_signal: A numpy array of time-domain signals to be</span>
+<span class="sd">            played back by the speaker array. This input is generated</span>
+<span class="sd">            by :func:`~pybeam.map_filters`. </span>
+<span class="sd">        mapping: A dictionary that points speaker pairs to audio</span>
+<span class="sd">            stream indexes from PyAudio. </span>
+
+<span class="sd">            A speaker pair is defined as two adjacent speakers, and</span>
+<span class="sd">            is assigned such that speakers 0 and 1 are speaker </span>
+<span class="sd">            pair 0, 2 and 3 are speaker pair 2, etc. </span>
+<span class="sd">        samp_freq: The sampling frequency of the signals </span>
+<span class="sd">            in ``output_signal``. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    
+    <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">directory</span><span class="p">):</span>
+        <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="n">directory</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">directory</span><span class="p">)</span>
+    <span class="c1">#mapping = speaker pair # -&gt; input id</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">output_signal</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">2</span><span class="p">):</span>
+        <span class="n">scipy</span><span class="o">.</span><span class="n">io</span><span class="o">.</span><span class="n">wavfile</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/speaker</span><span class="si">{:d}</span><span class="s1">.wav&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">directory</span><span class="p">,</span> <span class="n">i</span><span class="o">//</span><span class="mi">2</span><span class="p">),</span>
+            <span class="n">samp_freq</span><span class="p">,</span>
+            <span class="n">output_signal</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span><span class="o">+</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+    <span class="n">pkl</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">mapping</span><span class="p">,</span> <span class="nb">open</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/mapping.pkl&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">directory</span><span class="p">),</span> <span class="s1">&#39;wb&#39;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="playback_wav_dir"><a class="viewcode-back" href="../pybeam.html#pybeam.playback_wav_dir">[docs]</a><span class="k">def</span> <span class="nf">playback_wav_dir</span><span class="p">(</span><span class="n">directory</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Plays back a directory generated by :func:`~pybeam.write_wav_dir`.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        directory: A readable directory generated by </span>
+<span class="sd">            :func:`~pybeam.write_wav_dir`.</span>
+<span class="sd">        chunks: The number of samples to read each iteration. </span>
+<span class="sd">            Optional, defaults to 1024. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+   
+    <span class="c1">#read mapping</span>
+    <span class="n">mapping</span> <span class="o">=</span> <span class="n">pkl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/mapping.pkl&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">directory</span><span class="p">),</span> <span class="s1">&#39;rb&#39;</span><span class="p">))</span>
+    <span class="n">nstreams</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">mapping</span><span class="p">)</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">PyAudio</span><span class="p">()</span>
+    
+    <span class="c1">#read wav files</span>
+    <span class="n">wfiles</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">):</span>
+        <span class="n">wavfile</span> <span class="o">=</span> <span class="n">wave</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/speaker</span><span class="si">{:d}</span><span class="s1">.wav&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">directory</span><span class="p">,</span> <span class="n">i</span><span class="p">),</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span>
+        <span class="n">wfiles</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span> <span class="o">=</span> <span class="n">wavfile</span>
+    
+    <span class="c1">#create streams</span>
+    <span class="n">streams</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">):</span>
+        <span class="n">streams</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">open</span><span class="p">(</span>
+            <span class="nb">format</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">get_format_from_width</span><span class="p">(</span><span class="n">wfiles</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">getsampwidth</span><span class="p">()),</span>
+            <span class="n">channels</span><span class="o">=</span><span class="n">wfiles</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">getnchannels</span><span class="p">(),</span>
+            <span class="n">rate</span><span class="o">=</span><span class="n">wfiles</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">getframerate</span><span class="p">(),</span>
+            <span class="n">output</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">output_device_index</span><span class="o">=</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+    
+    <span class="c1">#playback wav files</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="p">[</span><span class="n">wfiles</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">readframes</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">)]</span>
+    <span class="k">while</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">([</span><span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">)]):</span>
+        <span class="c1">#print([len(_) for _ in data])</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">):</span> <span class="n">streams</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="p">[</span><span class="n">wfiles</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">readframes</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">)]</span>
+    <span class="c1">#print([len(_) for _ in data])</span>
+
+    <span class="c1">#close up shop</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nstreams</span><span class="p">):</span>
+        <span class="n">streams</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">stop_stream</span><span class="p">()</span>
+        <span class="n">streams</span><span class="p">[</span><span class="n">mapping</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="n">p</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="visualize"><a class="viewcode-back" href="../pybeam.html#pybeam.visualize">[docs]</a><span class="k">def</span> <span class="nf">visualize</span><span class="p">(</span><span class="n">Q</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">matrix</span><span class="p">,</span> <span class="n">X</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> 
+        <span class="n">onval</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">R</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">test_index</span><span class="p">:</span> <span class="nb">float</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> 
+        <span class="n">dpu</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">sample_size</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">1024</span><span class="p">,</span> <span class="n">rate</span><span class="p">:</span> <span class="nb">int</span><span class="o">=</span><span class="mi">44100</span><span class="p">,</span> 
+        <span class="n">verbose</span><span class="p">:</span> <span class="nb">bool</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generates a heatmap that helps visualize beamforming.</span>
+
+<span class="sd">    Plots the heatmap using matplotlib. </span>
+<span class="sd">    </span>
+<span class="sd">    Args:</span>
+<span class="sd">        Q: A numpy matrix of complex filters for multiple</span>
+<span class="sd">            loudspeakers, the output of </span>
+<span class="sd">            :func:`~pybeam.get_DAS_filters` or </span>
+<span class="sd">            :func:`~pybeam.get_PM_filters`.</span>
+<span class="sd">        X: A verification matrix generated by </span>
+<span class="sd">            :func:`~pybeam.get_verification_matrix`.</span>
+<span class="sd">        Y: A source matrix generated by</span>
+<span class="sd">            :func:`~pybeam.get_source_matrix`.</span>
+<span class="sd">        onval: The on value specified during the computation</span>
+<span class="sd">            of filters.</span>
+<span class="sd">        R: The distance of verification points from the </span>
+<span class="sd">            speaker array specified during the </span>
+<span class="sd">            computation of filters.</span>
+<span class="sd">        test_index: The index of ``numpy.fft.fftfreq``</span>
+<span class="sd">            corresponding to the frequency of interest. Ensure</span>
+<span class="sd">            that ``numpy.fft.fftreq``&#39;s parameter</span>
+<span class="sd">            ``n`` and ``sample_size`` are equal.  </span>
+<span class="sd">        dpu: The dots per unit for the plot. Higher values </span>
+<span class="sd">            produce a prettier plot but take longer to compute. </span>
+<span class="sd">        sample_size: The number of samples specified when</span>
+<span class="sd">            computing filters. </span>
+<span class="sd">        rate: The sampling rate specified when computing</span>
+<span class="sd">            filters. </span>
+<span class="sd">        verbose: Flag to enable debug print statements. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">M</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Y</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">M_test</span> <span class="o">=</span> <span class="nb">int</span><span class="p">((</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">dpu</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">verbose</span><span class="p">):</span> <span class="nb">print</span><span class="p">(</span><span class="n">M_test</span><span class="p">)</span>
+    <span class="n">X_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="n">M_test</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="o">-</span><span class="n">dpu</span> <span class="o">*</span> <span class="p">(</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">),</span> <span class="n">dpu</span> <span class="o">*</span> <span class="p">(</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)):</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dpu</span> <span class="o">*</span> <span class="p">(</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)):</span>
+            <span class="n">X_test</span><span class="p">[</span><span class="n">n</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">i</span> <span class="o">/</span> <span class="n">dpu</span><span class="p">,</span> <span class="n">j</span> <span class="o">/</span> <span class="n">dpu</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+            <span class="n">n</span> <span class="o">+=</span> <span class="mi">1</span> 
+    <span class="n">Z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asmatrix</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">M_test</span><span class="p">,</span> <span class="n">L</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">&#39;complex_&#39;</span><span class="p">))</span>
+    <span class="n">freq</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">fft</span><span class="o">.</span><span class="n">fftfreq</span><span class="p">(</span><span class="n">sample_size</span><span class="p">,</span> <span class="mi">1</span> <span class="o">/</span> <span class="n">rate</span><span class="p">)[</span><span class="n">test_index</span><span class="p">]</span>
+    <span class="n">omega</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">freq</span>
+    <span class="k">if</span><span class="p">(</span><span class="n">verbose</span><span class="p">):</span> 
+        <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Freq:</span><span class="si">{:.0f}</span><span class="s1">, AngVel:</span><span class="si">{:.0f}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">freq</span><span class="p">,</span> <span class="n">omega</span><span class="p">),</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">M_test</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">m</span> <span class="o">%</span> <span class="mi">10000</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">verbose</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">M_test</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">l</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">L</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">__l2</span><span class="p">(</span><span class="n">X_test</span><span class="p">[</span><span class="n">m</span><span class="p">]</span> <span class="o">-</span> <span class="n">Y</span><span class="p">[</span><span class="n">l</span><span class="p">])</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">Z</span><span class="p">[</span><span class="n">m</span><span class="p">,</span> <span class="n">l</span><span class="p">]</span> <span class="o">=</span> <span class="n">__Zf</span><span class="p">(</span><span class="n">X_test</span><span class="p">[</span><span class="n">m</span><span class="p">],</span> <span class="n">Y</span><span class="p">[</span><span class="n">l</span><span class="p">],</span> <span class="n">omega</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">Z</span><span class="p">[</span><span class="n">m</span><span class="p">,</span> <span class="n">l</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">p_test</span> <span class="o">=</span> <span class="n">Z</span> <span class="o">*</span> <span class="n">Q</span><span class="p">[</span><span class="n">test_index</span><span class="p">]</span><span class="o">.</span><span class="n">T</span>   
+    <span class="n">output</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(((</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">dpu</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="p">(</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">dpu</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">X_test</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+        <span class="n">output</span><span class="p">[(</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">dpu</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="nb">int</span><span class="p">(</span><span class="n">X_test</span><span class="p">[</span><span class="n">n</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">*</span><span class="n">dpu</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">X_test</span><span class="p">[</span><span class="n">n</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">dpu</span> 
+                <span class="o">+</span> <span class="p">(</span><span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">dpu</span><span class="p">)]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">p_test</span><span class="p">[</span><span class="n">n</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]):</span>
+            <span class="k">if</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">denom</span> <span class="o">=</span> <span class="mi">0</span>
+                <span class="k">if</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">and</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">+=</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span>
+                    <span class="n">denom</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">i</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">+=</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span>
+                    <span class="n">denom</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">j</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">and</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">+=</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+                    <span class="n">denom</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">j</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">+=</span> <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+                    <span class="n">denom</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">denom</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>    
+                    <span class="n">output</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">/=</span> <span class="n">denom</span>
+    <span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">()</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">X</span><span class="p">,</span> <span class="n">Y</span><span class="p">))[:,</span> <span class="mi">0</span><span class="p">]),</span> 
+        <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">X</span><span class="p">,</span> <span class="n">Y</span><span class="p">))[:,</span> <span class="mi">1</span><span class="p">],</span> 
+        <span class="n">c</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;b&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span><span class="s1">&#39;r&#39;</span><span class="p">]</span><span class="o">*</span><span class="p">(</span><span class="n">M</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span><span class="s1">&#39;g&#39;</span><span class="p">]</span><span class="o">*</span><span class="n">L</span><span class="p">,</span> <span class="n">marker</span><span class="o">=</span><span class="s1">&#39;o&#39;</span><span class="p">)</span>
+    <span class="n">implot</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> 
+            <span class="n">interpolation</span><span class="o">=</span><span class="s1">&#39;hamming&#39;</span><span class="p">,</span> 
+            <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;inferno&#39;</span><span class="p">,</span> 
+            <span class="n">extent</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="n">R</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">R</span><span class="o">+</span><span class="mi">1</span><span class="p">],</span> 
+            <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">onval</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">()</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{:.0f}</span><span class="s2">Hz&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">freq</span><span class="p">),</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;x, [m]&quot;</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">&quot;y, [m]&quot;</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+    
+    
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Hello, world!&quot;</span><span class="p">)</span>
+</pre></div>
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <form class="search" action="../search.html" method="get">
+      <div><input type="text" name="q" /></div>
+      <div><input type="submit" value="Go" /></div>
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">PyBeam 0.1.1 documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Module code</a> &#187;</li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright 2018, Sarkis Ter Martirosyan.
+      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 1.5.6.
+    </div>
+  </body>
+</html>

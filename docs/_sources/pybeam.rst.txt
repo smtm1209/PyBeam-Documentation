@@ -1,0 +1,7 @@
+pybeam module
+=============
+
+.. automodule:: pybeam
+    :members:
+    :undoc-members:
+    :show-inheritance:
